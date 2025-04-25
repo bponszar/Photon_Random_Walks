@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Photon Random Walk</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #e0f7fa, #e1f5fe);
+      color: #222;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      font-size: 26px;
+      text-align: center;
+      color: #01579b;
+    }
+
+    .main {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: flex-start;
+      gap: 20px;
+      width: 100%;
+      max-width: 1000px;
+    }
+
+    canvas {
+      border: 2px solid #333;
+      background-color: #808080;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    button {
+      background-color: #0277bd;
+      color: white;
+      font-size: 16px;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    button:hover {
+      background-color: #01579b;
+    }
+
+    input[type="range"] {
+      width: 120px;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .mean-time {
+      margin-top: 12px;
+      font-size: 15px;
+      font-weight: bold;
+    }
+
+    #chartCanvas {
+      background: white;
+      border: 1px solid #aaa;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Simulation of Random Paths of Photons Inside of Stars</h1>
+
+  <div class="main">
+    <canvas id="gridCanvas" width="400" height="400"></canvas>
+
+    <div class="controls">
+      <button id="toggleBtn">⏸️</button>
+      <button id="resetBtn">🔄</button>
+      <label><span>⏱️ Speed</span><input id="speedSlider" type="range" min="1" max="60" value="30"></label>
+      <label><span>Size</span><input id="sizeSlider" type="range" min="5" max="200" value="150"></label>
+      <label><span>Anisotropy</span><input id="biasSlider" type="range" min="0" max="100" value="25"></label>
+
+      <div class="mean-time">
+        Mean Time: <span id="meanTime">0.00</span> seconds
+      </div>
+
+      <canvas id="chartCanvas" width="300" height="150"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const gridCanvas = document.getElementById('gridCanvas');
+    const ctxGrid = gridCanvas.getContext('2d');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const speedSlider = document.getElementById('speedSlider');
+    const sizeSlider = document.getElementById('sizeSlider');
+    const biasSlider = document.getElementById('biasSlider');
+    const meanTimeDisplay = document.getElementById('meanTime');
+    const chartCanvas = document.getElementById('chartCanvas');
+    const chartCtx = chartCanvas.getContext('2d');
+
+    const canvasSize = 400;
+    gridCanvas.width = gridCanvas.height = canvasSize;
+
+    let gridSize = parseInt(sizeSlider.value);
+    let cellSize = canvasSize / gridSize;
+    let grid = [];
+    let walker = { x: 0, y: 0 };
+    let animationId = null;
+    let isRunning = true;
+    let frameInterval = 60 / parseInt(speedSlider.value);
+    let frameCount = 0;
+    const maxRadius = canvasSize / 2.3;
+    let recordedTimes = [];
+    let startTime = 0;
+    let resetPending = false;
+
+    function initGrid() {
+      cellSize = canvasSize / gridSize;
+      grid = Array(gridSize).fill().map(() => Array(gridSize).fill('white'));
+      walker = {
+        x: Math.floor(gridSize / 2),
+        y: Math.floor(gridSize / 2)
+      };
+      resetPending = false;
+    }
+
+    function drawGrid() {
+      ctxGrid.fillStyle = '#808080';
+      ctxGrid.fillRect(0, 0, canvasSize, canvasSize);
+
+      ctxGrid.fillStyle = '#ffff00';
+      ctxGrid.beginPath();
+      ctxGrid.arc(canvasSize / 2, canvasSize / 2, maxRadius, 0, Math.PI * 2);
+      ctxGrid.fill();
+
+      ctxGrid.strokeStyle = '#ddd';
+      ctxGrid.beginPath();
+      ctxGrid.arc(canvasSize / 2, canvasSize / 2, maxRadius, 0, Math.PI * 2);
+      ctxGrid.stroke();
+
+      ctxGrid.fillStyle = 'black';
+      for (let y = 0; y < gridSize; y++) {
+        for (let x = 0; x < gridSize; x++) {
+          if (grid[y][x] === 'black') {
+            ctxGrid.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+          }
+        }
+      }
+
+      ctxGrid.fillStyle = 'red';
+      ctxGrid.fillRect(walker.x * cellSize, walker.y * cellSize, cellSize, cellSize);
+    }
+
+    function moveWalker() {
+      if (resetPending) return;
+
+      grid[walker.y][walker.x] = 'black';
+
+      const directions = [];
+      if (walker.x > 0) directions.push([-1, 0]);
+      if (walker.x < gridSize - 1) directions.push([1, 0]);
+      if (walker.y > 0) directions.push([0, -1]);
+      if (walker.y < gridSize - 1) directions.push([0, 1]);
+
+      const center = { x: gridSize / 2, y: gridSize / 2 };
+      const distances = directions.map(([dx, dy]) => {
+        const nx = walker.x + dx;
+        const ny = walker.y + dy;
+        return Math.hypot(nx - center.x, ny - center.y);
+      });
+
+      const maxDist = Math.max(...distances);
+      const maxIndex = distances.indexOf(maxDist);
+      const biasProb = parseInt(biasSlider.value) / 100;
+
+      const [dx, dy] = Math.random() < biasProb ? directions[maxIndex] :
+                       directions[Math.floor(Math.random() * directions.length)];
+
+      walker.x += dx;
+      walker.y += dy;
+
+      const walkerCenterX = (walker.x + 0.5) * cellSize;
+      const walkerCenterY = (walker.y + 0.5) * cellSize;
+      const canvasCenter = canvasSize / 2;
+      const distance = Math.hypot(walkerCenterX - canvasCenter, walkerCenterY - canvasCenter);
+
+      if (distance > maxRadius) {
+        const elapsedTime = (Date.now() - startTime) / 1000;
+        recordedTimes.push(elapsedTime);
+        updateMeanTime();
+        drawLineChart();
+        resetPending = true;
+        setTimeout(resetSimulation, 1000);
+      }
+    }
+
+    function updateMeanTime() {
+      if (recordedTimes.length === 0) return;
+      const mean = recordedTimes.reduce((a, b) => a + b, 0) / recordedTimes.length;
+      meanTimeDisplay.textContent = mean.toFixed(2);
+    }
+
+    function drawLineChart() {
+      const ctx = chartCtx;
+      const width = chartCanvas.width;
+      const height = chartCanvas.height;
+      ctx.clearRect(0, 0, width, height);
+
+      const padding = 30;
+      const maxTime = Math.max(...recordedTimes, 1);
+      const minTime = 0;
+
+      ctx.strokeStyle = '#ccc';
+      ctx.lineWidth = 1;
+
+      // Y-axis
+      ctx.beginPath();
+      ctx.moveTo(padding, padding);
+      ctx.lineTo(padding, height - padding);
+      ctx.stroke();
+
+      // X-axis
+      ctx.beginPath();
+      ctx.moveTo(padding, height - padding);
+      ctx.lineTo(width - padding, height - padding);
+      ctx.stroke();
+
+      // Y-axis ticks
+      ctx.fillStyle = '#000';
+      ctx.font = '10px Arial';
+      for (let i = 0; i <= 4; i++) {
+        const value = minTime + (maxTime - minTime) * (i / 4);
+        const y = height - padding - (value / maxTime) * (height - 2 * padding);
+        ctx.fillText(value.toFixed(1), 5, y + 3);
+        ctx.beginPath();
+        ctx.moveTo(padding - 3, y);
+        ctx.lineTo(padding, y);
+        ctx.stroke();
+      }
+
+      // X-axis ticks
+      recordedTimes.forEach((_, i) => {
+        const x = padding + i * ((width - 2 * padding) / (recordedTimes.length - 1 || 1));
+        ctx.fillText(i + 1, x - 3, height - padding + 12);
+      });
+
+      // Draw line
+      ctx.strokeStyle = '#0288d1';
+      ctx.beginPath();
+      recordedTimes.forEach((t, i) => {
+        const x = padding + i * ((width - 2 * padding) / (recordedTimes.length - 1 || 1));
+        const y = height - padding - (t / maxTime) * (height - 2 * padding);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    function resetSimulation() {
+      cancelAnimationFrame(animationId);
+      startTime = 0;
+      initGrid();
+      drawGrid();
+      if (isRunning) step();
+    }
+
+    function step() {
+      if (!startTime) startTime = Date.now();
+      if (!isRunning || resetPending) {
+        animationId = requestAnimationFrame(step);
+        return;
+      }
+
+      frameCount++;
+      if (frameCount >= frameInterval) {
+        moveWalker();
+        drawGrid();
+        frameCount = 0;
+      }
+      animationId = requestAnimationFrame(step);
+    }
+
+    toggleBtn.addEventListener('click', () => {
+      isRunning = !isRunning;
+      toggleBtn.textContent = isRunning ? '⏸️' : '▶️';
+      if (isRunning && !resetPending) step();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      cancelAnimationFrame(animationId);
+      recordedTimes = [];
+      meanTimeDisplay.textContent = '0.00';
+      chartCtx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+      startTime = 0;
+      initGrid();
+      drawGrid();
+      if (isRunning) step();
+    });
+
+    speedSlider.addEventListener('input', () => {
+      frameInterval = 60 / parseInt(speedSlider.value);
+    });
+
+    sizeSlider.addEventListener('input', () => {
+      cancelAnimationFrame(animationId);
+      gridSize = parseInt(sizeSlider.value);
+      initGrid();
+      drawGrid();
+      if (isRunning) step();
+    });
+
+    // Initialize
+    initGrid();
+    drawGrid();
+    step();
+  </script>
+
+</body>
+</html>
